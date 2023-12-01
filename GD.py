@@ -393,10 +393,14 @@ class ConditionalGradient(AbstractOptimizer):
 
         super().__init__(x0, function, eps, max_steps, **kwargs)
 
-        self._indices = [self.vars.index(symbol) for const in constraints for symbol in const.free_symbols]
+        self.constraints = constraints
 
-        self.constraints = [sym.lambdify(self.vars[index], constraints[n], "numpy")
-                            for n, index in enumerate(self._indices)]
+        self._constr_indices = [self.vars.index(symbol) for const in constraints for symbol in const.free_symbols]
+
+        self._constraints_lam = [sym.lambdify(self.vars[index], constraints[n], "numpy")
+                            for n, index in enumerate(self._constr_indices)]
+        ## only for testing -- REMOVE BEFORE MERGE
+        self._iterations = 0
 
         match method:
             case "linearize":
@@ -411,10 +415,10 @@ class ConditionalGradient(AbstractOptimizer):
         return
 
     def check_constraints(self, x: np.array):
-        check = [self.constraints[n](x[index]) for n, index in enumerate(self._indices)]
+        check = [self._constraints_lam[n](x[index]) for n, index in enumerate(self._constr_indices)]
         if all(check):
             return True
-        return np.argmin([self.constraints[n](x[index]) for n, index in enumerate(self._indices)])
+        return np.argmin(check)
 
     def _fw_lr(self, x: np.array, *args, **kwargs):
         return 2/(self._iterations + 2)
@@ -426,7 +430,13 @@ class ConditionalGradient(AbstractOptimizer):
             self._done = True
         x_new = x + np.dot(self._lr_type(x, **kwargs), self._num_grad)
 
-        return
+        if self.check_constraints(x_new) is True:
+            return x_new
+        else:
+            index = self.check_constraints(x_new)
+            print(self.vars.index(self._get_free_symbols(self.constraints[index])[0]), self.constraints[index].rhs)
+
+        return x_new
 
 
 x1, x2 = sym.symbols("x1 x2")
