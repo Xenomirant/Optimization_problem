@@ -21,7 +21,7 @@ class SympyParser(Parser):
 
     @functools.singledispatchmethod
     def parse(self, expression: typing.Union[sym.Expr, str]):
-        return None
+        return expression
 
     @parse.register(sym.Expr)
     def _(self, expression: sym.Expr):
@@ -33,7 +33,7 @@ class SympyParser(Parser):
 
 
 class AbstractOptimizer(ABC):
-    def __init__(self, x0: np.array, function: typing.Union[sym.Expr, str], eps: float = 1e-7,
+    def __init__(self, x0: np.array, function: typing.Union[sym.Expr, str], *args, eps: float = 1e-7,
                  max_steps: int = 1000, **kwargs) -> None:
 
         if not isinstance(function, sym.Expr):
@@ -78,7 +78,7 @@ class AbstractOptimizer(ABC):
     def stop_criterion(self, iteration: int, x: np.array, f_x: float) -> bool:
 
         # stop if gradients are zero
-        if np.linalg.norm(self._num_grad) == 0:
+        if np.linalg.norm(self._num_grad) <= self.eps**(3/2):
             return True
 
         # stop if max_steps exceeded
@@ -98,14 +98,14 @@ class AbstractOptimizer(ABC):
         if not self._done:
             raise Exception("Optimisation must be run first!")
 
-        def to_string(x: np.array) -> str:
-            return np.array2string(x, formatter={'float_kind': lambda x: "%.2e" % float(x)})
+        def to_string(array: np.array) -> str:
+            return np.array2string(array, formatter={'float_kind': lambda value: "%.2e" % float(value)})
 
-        range = 1.2*max(abs(self.x0 - self._steps[-1]))
+        area = 1.2*max(abs(self.x0 - self._steps[-1]))
 
-        x = np.linspace(self._steps[-1][0]+range, self._steps[-1][0]-range, 500)
+        x = np.linspace(self._steps[-1][0]+area, self._steps[-1][0]-area, 500)
 
-        y = np.linspace(self._steps[-1][1]+range, self._steps[-1][1]-range, 500)
+        y = np.linspace(self._steps[-1][1]+area, self._steps[-1][1]-area, 500)
 
         X, Y = np.meshgrid(x, y)
 
@@ -120,12 +120,12 @@ class AbstractOptimizer(ABC):
         plt.scatter(*self.x0)
         plt.annotate("x0: " + to_string(self.x0)+"\nf(x): {:.2e}".format(float(self._values[0])),
                      (self.x0[0], self.x0[1]),
-                     (self.x0[0]+0.025*range, self.x0[1]+0.01*range), fontsize=8)
-        plt.scatter(*self._steps[-1])
+                     (self.x0[0]+0.025*area, self.x0[1]+0.01*area), fontsize=8)
+        plt.plot(x, y, "--o", color="black")
+        plt.scatter(*self._steps[-1],  color="blue", s=100)
         plt.annotate("X*: " + to_string(self._steps[-1]) + "\nf(x): {:.2e}".format(float(self._values[-1])),
                      (self._steps[-1][0], self._steps[-1][1]),
-                     (self._steps[-1][0] + 0.025 * range, self._steps[-1][1] + 0.01 * range), fontsize=8)
-        plt.plot(x, y, "--o", color="black")
+                     (self._steps[-1][0] + 0.025 * area, self._steps[-1][1] - 0.1 * area), fontsize=8)
         CS = plt.contour(X, Y, Z)
         plt.clabel(CS, CS.levels, inline=True, fontsize=10)
         plt.colorbar()
@@ -213,14 +213,16 @@ class Optimizer:
     def __set_optimizer(optimizer: str) -> typing.Type[AbstractOptimizer]:
 
         match optimizer:
-            case "GradientDescent"|"GD":
+            case "GradientDescent" | "GD":
                 optimizer = GD
-            case "Neuton"|"N":
+            case "Neuton" | "N":
                 optimizer = Neuton
-            case "ConjugateGradient"|"CG":
+            case "ConjugateGradient" | "CG":
                 optimizer = ConjugateGradient
-            case "ConditionalGradient"|"ConG":
+            case "ConditionalGradient" | "ConG":
                 optimizer = ConditionalGradient
+            case "QuadPenalty" | "QP":
+                optimizer = QuadPenalty
             case _:
                 raise ValueError("Optimizer is not yet implemented")
 
@@ -229,17 +231,18 @@ class Optimizer:
     def set_parser(self, parser: Parser) -> None:
         self.parser = parser
 
-    def optimize(self, x0: np.array, expression: typing.Any, *, eps: float = 1e-7, max_iter: int = 1000,
+    def optimize(self, x0: np.array, function: typing.Any, *args, eps: float = 1e-7, max_iter: int = 1000,
                  show: bool = True, **kwargs) -> typing.Optional[typing.List]:
 
-        expression = self.parser(expression)
+        expression = self.parser(function)
 
         if "constraints" in kwargs:
             constraints = [self.parser(expr) for expr in kwargs.get("constraints")]
+            del kwargs["constraints"]
         else:
             constraints = []
 
-        self.optimizer = self.optimizer_cls(x0, expression, eps=eps, max_iter=max_iter,
+        self.optimizer = self.optimizer_cls(x0=x0, function=expression, *args, eps=eps, max_iter=max_iter,
                                             constraints=constraints, **kwargs)
 
         self.optimizer()
@@ -264,10 +267,10 @@ class GD(AbstractOptimizer):
     :param kwargs:
     """
 
-    def __init__(self, x0: np.array, function: sym.Expr, eps: float = 1e-7, max_steps: int = 1000,
+    def __init__(self, x0: np.array, function: sym.Expr, *args, eps: float = 1e-7, max_steps: int = 1000,
                  method: str = "armijo", **kwargs) -> None:
 
-        super().__init__(x0, function, eps, max_steps, **kwargs)
+        super().__init__(x0=x0, function=function, eps=eps, max_steps=max_steps, **kwargs)
 
         match method:
             case "armijo":
@@ -312,10 +315,11 @@ class GD(AbstractOptimizer):
 
 class Neuton(AbstractOptimizer):
 
-    def __init__(self, x0: np.array, function: sym.Expr, eps: float = 1e-7, max_steps: int = 1000,
+    def __init__(self, x0: np.array, function: sym.Expr, *args, eps: float = 1e-7, max_steps: int = 1000,
                  method: str = "default", **kwargs) -> None:
 
-        super().__init__(x0, function, eps, max_steps, **kwargs)
+        super().__init__(x0=x0, function=function, eps=eps, max_steps=max_steps, **kwargs)
+
         self._num_hessian = None
 
         match method:
@@ -339,10 +343,10 @@ class Neuton(AbstractOptimizer):
 
 class ConjugateGradient(AbstractOptimizer):
 
-    def __init__(self, x0: np.array, function: sym.Expr, eps: float = 1e-7, max_steps: int = 1000,
+    def __init__(self, x0: np.array, function: sym.Expr, *args, eps: float = 1e-7, max_steps: int = 1000,
                  method: str = "quadratic", **kwargs) -> None:
 
-        super().__init__(x0, function, eps, max_steps, **kwargs)
+        super().__init__(x0=x0, function=function, eps=eps, max_steps=max_steps, **kwargs)
 
         warn("If the function is not a quadratic form, current realization is not suggested!")
         self._beta = None
@@ -370,8 +374,7 @@ class ConjugateGradient(AbstractOptimizer):
             first_term = np.dot(self._quadratic_form, self._num_grad)
             self._beta = (np.dot(first_term,
                                  np.array(
-                                     [-self.substitute(diff, x) for diff in self._gradient],
-                                          dtype=np.float32))) / \
+                                     [-self.substitute(diff, x) for diff in self._gradient], dtype=np.float32))) / \
                          (np.dot(first_term, self._num_grad))
 
         self._num_grad = np.array([self.substitute(diff, x) for diff in self._gradient], dtype=np.float32) + \
@@ -388,27 +391,22 @@ class ConjugateGradient(AbstractOptimizer):
 
 class ConditionalGradient(AbstractOptimizer):
 
-    def __init__(self, x0: np.array, function: sym.Expr, constraints: typing.List[sym.Expr], eps: float = 1e-7, max_steps: int = 1000,
+    def __init__(self, x0: np.array, function: sym.Expr, *args, eps: float = 1e-7, max_steps: int = 1000,
                  method: str = "linearize", **kwargs) -> None:
 
-        super().__init__(x0, function, eps, max_steps, **kwargs)
+        super().__init__(x0=x0, function=function, eps=eps, max_steps=max_steps, **kwargs)
 
-        self.constraints = constraints
+        self.constraints = kwargs.get("constraints")
 
-        self._constr_indices = [self.vars.index(symbol) for const in constraints for symbol in const.free_symbols]
+        self._constr_indices = [self.vars.index(symbol) for const in self.constraints for symbol in const.free_symbols]
 
-        self._constraints_lam = [sym.lambdify(self.vars[index], constraints[n], "numpy")
-                            for n, index in enumerate(self._constr_indices)]
-        ## only for testing -- REMOVE BEFORE MERGE
-        self._iterations = 0
+        self._constraints_lam = [sym.lambdify(self.vars[index], self.constraints[n], "numpy")
+                                 for n, index in enumerate(self._constr_indices)]
 
         match method:
             case "linearize":
                 self._lr_type = self._fw_lr
                 self._lr_params = {}
-                # self._quadratic_form = np.array(sym.hessian(self.function, self.vars), dtype=np.float32)/2
-                # self._bias = np.array(self.substitute(self.function, np.array([0 for var in self.vars])),
-                #                       dtype=np.float32).item()
             case _:
                 raise NotImplementedError("Method does not exist or is not implemented")
 
@@ -433,26 +431,142 @@ class ConditionalGradient(AbstractOptimizer):
         if self.check_constraints(x_new) is True:
             return x_new
         else:
+            # identify constraints and make linear projection
             index = self.check_constraints(x_new)
-            print(self.vars.index(self._get_free_symbols(self.constraints[index])[0]), self.constraints[index].rhs)
+            var, value = self.vars.index(
+                self._get_free_symbols(self.constraints[index])[0]
+            ), self.constraints[index].rhs
+
+            x_new[var] = value
 
         return x_new
 
+    def minimize(self, **kwargs) -> None:
 
-x1, x2 = sym.symbols("x1 x2")
+        if self._done:
+            return None
 
-expr = x1**2 -4*x1 + x2**2  - 2*x2
+        self._iterations = 0
 
-constr = [x1 + 0*x2 >= 0, x1 + 0*x2 <= 1, 0*x1 + x2 >= 0, 0*x1 + x2 <= 2]
-#
-x0 = np.array([0, 0])
-#
-opt = ConditionalGradient(x0=x0, function=expr, constraints=constr)
+        self._steps.append(self._x)
+        self._values.append(np.array([self.substitute(self.function, self._x)]).item())
 
-print(opt.step(np.array([0, 0])))
-#
-# opt.minimize()
-#
-# print(opt.path)
-#
-# opt.plot()
+        while True:
+
+            x = self.step(self._x, **kwargs)
+            # local condition
+            if np.linalg.norm(x - self._x) <= .1:
+                break
+
+            f_x = np.array([self.substitute(self.function, x)], dtype=np.float32).item()
+            self._iterations += 1
+
+            # stop if values increased on iteration
+            if (f_x - self._values[-1]) > 0:
+                break
+
+            if self.stop_criterion(self._iterations, x, f_x):
+                self._steps.append(x)
+                self._values.append(f_x)
+                break
+
+            self._x = x
+            self._steps.append(x)
+            self._values.append(f_x)
+
+            if self._done:
+                break
+
+        self._done = True
+        self._path = list(zip(self._steps, self._values))
+        return
+
+
+class QuadPenalty(AbstractOptimizer):
+
+    def __init__(self, x0: np.array, function: sym.Expr, *args, eps: float = 1e-7, max_steps: int = 1000,
+                 method: str = "exponential", **kwargs) -> None:
+
+        super().__init__(x0=x0, function=function, eps=eps, max_steps=max_steps, **kwargs)
+
+        self.constraints = kwargs.get("constraints")
+
+        # only for testing
+        self._iterations = 0
+
+        self._l_iterations = 0
+
+        match method:
+            case "exponential":
+                self._lr_type = self._exponential_lr
+                self._lr_params = {}
+            case "polynomial":
+                self._lr_type = self._polynomial_lr
+                self._lr_params = kwargs.get("lr_params", {"poly_power": 2})
+            case _:
+                raise NotImplementedError("Method does not exist or is not implemented")
+
+        return
+
+    def _exponential_lr(self, x: np.array, *args, **kwargs):
+        return 2**self._iterations/2
+
+    def _polynomial_lr(self, x: np.array, *args, **kwargs):
+        return (self._iterations+1)**kwargs["lr_params"]["poly_power"]
+
+    def step(self, x: np.array, **kwargs) -> np.array:
+
+        lagrangian = self.function + self._lr_type(x, lr_params=self._lr_params) * \
+                     sum([constraint ** 2 for constraint in self.constraints])
+
+        gradient = []
+        for var in self.vars:
+            gradient.append(-lagrangian.diff(var))
+
+        self._num_grad = np.array([self.substitute(diff, x) for diff in gradient], dtype=np.float32)
+
+        minimizer = GD(x0=x, function=lagrangian, eps=self.eps/2, max_steps=self.max_steps/10, armijo_params={
+            "alpha": 2,
+            "delta": 1/4,
+            "theta": 1/8
+        })
+
+        minimizer.minimize()
+
+        self._iterations += minimizer._iterations - 1
+
+        return minimizer._steps[-1]
+
+    def minimize(self, **kwargs) -> None:
+
+        if self._done:
+            return None
+
+        self._iterations = 0
+
+        self._steps.append(self._x)
+        self._values.append(np.array([self.substitute(self.function, self._x)]).item())
+
+        while True:
+
+            x = self.step(self._x, **kwargs)
+
+            f_x = np.array([self.substitute(self.function, x)], dtype=np.float32).item()
+            self._iterations += 1
+
+            if self.stop_criterion(self._iterations, x, f_x):
+                self._steps.append(x)
+                self._values.append(f_x)
+                break
+
+            self._x = x
+            self._steps.append(x)
+            self._values.append(f_x)
+
+            if self._done:
+                break
+
+        self._done = True
+        self._path = list(zip(self._steps, self._values))
+
+        return
