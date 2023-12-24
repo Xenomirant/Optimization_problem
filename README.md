@@ -1,5 +1,6 @@
 # Optimization_problems
-Optimization algorithms for the course
+Impementation of different constrained and unconstrained optimization algorithms heavily relying on sympy for symbolic differentiation.
+Numerical differentiation is not implemented.
 
 #### Реализации алгоритмов  находятся в файле GD.py
 
