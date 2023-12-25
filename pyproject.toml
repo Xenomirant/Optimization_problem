@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["optimizer"]
+
+[project]
+name = "optimizer"
+version = "0.0.1"
+dependencies = [
+    "sympy",
+    "numpy",
+    "matplotlib"
+]

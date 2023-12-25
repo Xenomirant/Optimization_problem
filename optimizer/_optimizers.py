@@ -1,35 +1,10 @@
 import numpy as np
 import sympy as sym
-from abc import ABC, abstractmethod
+from abc import ABC
 import typing
-import functools
+from . import _parsers
 import matplotlib.pyplot as plt
 from warnings import warn
-
-
-class Parser(ABC):
-
-    @abstractmethod
-    def parse(self, expression: typing.Any) -> sym.Expr:
-        pass
-
-    def __call__(self, expression: typing.Any) -> sym.Expr:
-        return self.parse(expression)
-
-
-class SympyParser(Parser):
-
-    @functools.singledispatchmethod
-    def parse(self, expression: typing.Union[sym.Expr, str]):
-        return expression
-
-    @parse.register(sym.Expr)
-    def _(self, expression: sym.Expr):
-        return expression
-
-    @parse.register(str)
-    def _(self, expression: str):
-        return sym.parse_expr(expression)
 
 
 class AbstractOptimizer(ABC):
@@ -78,19 +53,22 @@ class AbstractOptimizer(ABC):
     def stop_criterion(self, iteration: int, x: np.array, f_x: float) -> bool:
 
         # stop if gradients are zero
-        if np.linalg.norm(self._num_grad) <= self.eps**(3/2):
+        if np.linalg.norm(self._num_grad) <= self.eps:
             return True
 
         # stop if max_steps exceeded
         if iteration > self.max_steps:
             return True
 
-        # stop if step is too small
+        # stop if argument step is too small
         if np.linalg.norm(x - self._steps[-1]) < self.eps:
+            return True
+        # stop if function step is too small
+        if np.abs(f_x - float(self._values[-1])) < self.eps**(3/2):
             return True
         return False
 
-    def plot(self):
+    def plot(self, vmin: typing.Optional[float] = None, vmax: typing.Optional[float] = None):
         if len(self.vars) > 2:
             raise Exception(f"Multidimensional visualizations are not implemented yet! "
                             f"Got {len(self.vars)} input dimensions.")
@@ -103,9 +81,9 @@ class AbstractOptimizer(ABC):
 
         area = 1.2*max(abs(self.x0 - self._steps[-1]))
 
-        x = np.linspace(self._steps[-1][0]+area, self._steps[-1][0]-area, 500)
+        x = np.linspace(self._steps[-1][0]+area, self._steps[-1][0]-area, 1000)
 
-        y = np.linspace(self._steps[-1][1]+area, self._steps[-1][1]-area, 500)
+        y = np.linspace(self._steps[-1][1]+area, self._steps[-1][1]-area, 1000)
 
         X, Y = np.meshgrid(x, y)
 
@@ -126,7 +104,7 @@ class AbstractOptimizer(ABC):
         plt.annotate("X*: " + to_string(self._steps[-1]) + "\nf(x): {:.2e}".format(float(self._values[-1])),
                      (self._steps[-1][0], self._steps[-1][1]),
                      (self._steps[-1][0] + 0.025 * area, self._steps[-1][1] - 0.1 * area), fontsize=8)
-        CS = plt.contour(X, Y, Z)
+        CS = plt.contour(X, Y, Z, vmin=vmin, vmax=vmax)
         plt.clabel(CS, CS.levels, inline=True, fontsize=10)
         plt.colorbar()
         plt.show(block=True)
@@ -199,7 +177,7 @@ class AbstractOptimizer(ABC):
 class Optimizer:
 
     def __init__(self, optimizer: typing.Union[typing.Type[AbstractOptimizer], str],
-                 parser: Parser = SympyParser()) -> None:
+                 parser: _parsers.SympyParser = _parsers.SympyParser()) -> None:
 
         self.parser = parser
 
@@ -228,7 +206,7 @@ class Optimizer:
 
         return optimizer
 
-    def set_parser(self, parser: Parser) -> None:
+    def set_parser(self, parser: _parsers.Parser) -> None:
         self.parser = parser
 
     def optimize(self, x0: np.array, function: typing.Any, *args, eps: float = 1e-7, max_iter: int = 1000,
@@ -381,7 +359,7 @@ class ConjugateGradient(AbstractOptimizer):
             self._beta*self._num_grad
 
         lr = -(np.dot(np.dot(2*self._quadratic_form, x) + self._bias, self._num_grad)) / \
-             (2*np.dot(np.dot(self._quadratic_form, self._num_grad), self._num_grad))
+              (2*np.dot(np.dot(self._quadratic_form, self._num_grad), self._num_grad))
 
         if self._iterations >= len(self.vars) - 1:
             self._done = True
@@ -525,7 +503,7 @@ class QuadPenalty(AbstractOptimizer):
 
         self._num_grad = np.array([self.substitute(diff, x) for diff in gradient], dtype=np.float32)
 
-        minimizer = GD(x0=x, function=lagrangian, eps=self.eps/2, max_steps=self.max_steps/10, armijo_params={
+        minimizer = GD(x0=x, function=lagrangian, eps=self.eps/2, max_steps=self.max_steps//10, armijo_params={
             "alpha": 2,
             "delta": 1/4,
             "theta": 1/8
