@@ -2,6 +2,6 @@
 Impementation of different constrained and unconstrained optimization algorithms heavily relying on sympy for symbolic differentiation.
 Numerical differentiation is not implemented.
 
-#### Реализации алгоритмов  находятся в файле GD.py
+#### TODO: написать документацию.
 
 #### Визуализации - в jupyter ноутбуке.
